@@ -186,6 +186,26 @@ final class AuthServiceTests: XCTestCase {
         }
     }
 
+    /// Waking the Mac offline must not wipe the refresh token: a network error
+    /// during refresh is rethrown as-is and the session stays.
+    func testRefreshNetworkErrorKeepsTokens() async throws {
+        authorizer.initialResult = .success(makeSession(access: "a1", expiresIn: 30))
+        _ = try await service.signIn()
+        try service.attachEmail("alice@example.com")
+        clock.advance(120)
+        authorizer.refreshResult = .failure(AppError.network(.offline))
+
+        do {
+            _ = try await service.freshAccessToken()
+            XCTFail("expected refresh to fail")
+        } catch AppError.network(.offline) {
+            XCTAssertNotNil(service.session)
+            XCTAssertNotNil(try keychain.load(account: "alice@example.com"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testFreshAccessTokenFailsWhenNotSignedIn() async {
         do {
             _ = try await service.freshAccessToken()

@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class PollingCoordinatorTests: XCTestCase {
-    private var appState: AppState!
+    private var account: AccountState!
     private var keychain: KeychainService!
     private var authorizer: MockAuthorizer!
     private var auth: AuthService!
@@ -15,7 +15,7 @@ final class PollingCoordinatorTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        appState = AppState()
+        account = AccountState(email: "alice@example.com", colorIndex: 0)
         keychain = KeychainService(service: "com.pezy.gmail.tests.\(UUID().uuidString)")
         authorizer = MockAuthorizer()
         auth = AuthService(keychain: keychain, authorizer: authorizer)
@@ -25,7 +25,7 @@ final class PollingCoordinatorTests: XCTestCase {
         let suiteName = "polling.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)!
         coordinator = PollingCoordinator(
-            appState: appState,
+            account: account,
             auth: auth,
             api: api,
             scheduler: scheduler,
@@ -81,7 +81,6 @@ final class PollingCoordinatorTests: XCTestCase {
         await coordinator.start()
         await coordinator.networkChanged(to: .offline)
         XCTAssertEqual(coordinator.state, .paused(.network))
-        XCTAssertEqual(appState.connectionState, .offline)
     }
 
     func testNetworkRestoreFromPausedFetches() async throws {
@@ -106,10 +105,10 @@ final class PollingCoordinatorTests: XCTestCase {
 
         await coordinator.performTick()
 
-        XCTAssertEqual(appState.authState, .signedIn(email: "alice@example.com"))
-        XCTAssertEqual(appState.emails.count, 1)
-        XCTAssertEqual(appState.emails.first?.subject, "Hi")
-        XCTAssertEqual(appState.unreadCount, 200,
+        XCTAssertEqual(account.authState, .signedIn(email: "alice@example.com"))
+        XCTAssertEqual(account.emails.count, 1)
+        XCTAssertEqual(account.emails.first?.subject, "Hi")
+        XCTAssertEqual(account.unreadCount, 200,
                        "unreadCount must come from labels.get(INBOX), not from the visible list count")
         XCTAssertEqual(coordinator.lastHistoryId, "100")
     }
@@ -127,7 +126,7 @@ final class PollingCoordinatorTests: XCTestCase {
         await coordinator.performTick()
 
         XCTAssertEqual(api.profileCallCount, 1, "Must call getProfile to learn email")
-        XCTAssertEqual(appState.authState, .signedIn(email: "alice@example.com"))
+        XCTAssertEqual(account.authState, .signedIn(email: "alice@example.com"))
         XCTAssertEqual(coordinator.lastHistoryId, "200", "Should adopt fresh historyId from profile")
     }
 
@@ -135,11 +134,11 @@ final class PollingCoordinatorTests: XCTestCase {
         try await signInTestSession()
         coordinator.lastHistoryId = "100"
         try auth.attachEmail("alice@example.com")
-        appState.emails = [
+        account.emails = [
             makeEmail(id: "m1", subject: "old1"),
             makeEmail(id: "m2", subject: "old2")
         ]
-        appState.unreadCount = 199
+        account.unreadCount = 199
 
         api.historyResult = .success(HistoryResponse(
             historyId: "200",
@@ -149,8 +148,8 @@ final class PollingCoordinatorTests: XCTestCase {
 
         await coordinator.performTick()
 
-        XCTAssertEqual(appState.emails.map(\.id), ["m2"])
-        XCTAssertEqual(appState.unreadCount, 198,
+        XCTAssertEqual(account.emails.map(\.id), ["m2"])
+        XCTAssertEqual(account.unreadCount, 198,
                        "unreadCount must reflect labels.get(INBOX), not the visible list size")
         XCTAssertEqual(coordinator.lastHistoryId, "200")
     }
@@ -162,11 +161,11 @@ final class PollingCoordinatorTests: XCTestCase {
         try await signInTestSession()
         coordinator.lastHistoryId = "100"
         try auth.attachEmail("alice@example.com")
-        appState.emails = [
+        account.emails = [
             makeEmail(id: "m1", subject: "to delete"),
             makeEmail(id: "m2", subject: "keep")
         ]
-        appState.unreadCount = 5
+        account.unreadCount = 5
 
         api.historyResult = .success(HistoryResponse(
             historyId: "200",
@@ -176,8 +175,8 @@ final class PollingCoordinatorTests: XCTestCase {
 
         await coordinator.performTick()
 
-        XCTAssertEqual(appState.emails.map(\.id), ["m2"], "deleted message must leave the list")
-        XCTAssertEqual(appState.unreadCount, 4, "count must refresh after deletion")
+        XCTAssertEqual(account.emails.map(\.id), ["m2"], "deleted message must leave the list")
+        XCTAssertEqual(account.unreadCount, 4, "count must refresh after deletion")
         XCTAssertEqual(coordinator.lastHistoryId, "200")
     }
 
@@ -189,8 +188,8 @@ final class PollingCoordinatorTests: XCTestCase {
         coordinator.lastHistoryId = "100"
         try auth.attachEmail("alice@example.com")
         // Visible list capped at 20, but real INBOX has 200 unread.
-        appState.emails = (0..<20).map { makeEmail(id: "m\($0)", subject: "old\($0)") }
-        appState.unreadCount = 200
+        account.emails = (0..<20).map { makeEmail(id: "m\($0)", subject: "old\($0)") }
+        account.unreadCount = 200
 
         api.historyResult = .success(HistoryResponse(
             historyId: "200",
@@ -201,9 +200,9 @@ final class PollingCoordinatorTests: XCTestCase {
 
         await coordinator.performTick()
 
-        XCTAssertEqual(appState.unreadCount, 201,
+        XCTAssertEqual(account.unreadCount, 201,
                        "Must NOT collapse to emails.count (~20) — that was the bug")
-        XCTAssertGreaterThanOrEqual(appState.emails.count, 20)
+        XCTAssertGreaterThanOrEqual(account.emails.count, 20)
     }
 
     func testFetchIncrementalAddsNewMessageAndNotifies() async throws {
@@ -220,7 +219,8 @@ final class PollingCoordinatorTests: XCTestCase {
         await coordinator.performTick()
 
         XCTAssertEqual(notifier.notified.map(\.id), ["m1"])
-        XCTAssertEqual(appState.emails.first?.subject, "Fresh")
+        XCTAssertEqual(notifier.accounts, ["alice@example.com"], "notification must name the account")
+        XCTAssertEqual(account.emails.first?.subject, "Fresh")
     }
 
     func testHistoryExpiredFallsBackToFetchInitial() async throws {
@@ -244,8 +244,66 @@ final class PollingCoordinatorTests: XCTestCase {
 
         await coordinator.performTick()
 
-        XCTAssertEqual(appState.authState, .needsReauthorization)
-        XCTAssertEqual(appState.lastError, .auth(.refreshTokenInvalid))
+        XCTAssertEqual(account.authState, .needsReauthorization)
+        XCTAssertEqual(account.lastError, .auth(.refreshTokenInvalid))
+    }
+
+    func testHistoryIdIsStoredPerAccount() async throws {
+        coordinator.lastHistoryId = "123"
+        XCTAssertEqual(defaults.string(forKey: "lastHistoryId.alice@example.com"), "123")
+        XCTAssertNil(defaults.string(forKey: "lastHistoryId"), "must not use the old shared key")
+
+        coordinator.clearPersistedState()
+        XCTAssertNil(coordinator.lastHistoryId)
+    }
+
+    func testIncrementalPollAlwaysRefreshesUnreadCount() async throws {
+        try await signInTestSession()
+        coordinator.lastHistoryId = "100"
+        try auth.attachEmail("alice@example.com")
+        account.unreadCount = 3
+        api.historyResult = .success(HistoryResponse(historyId: "101", changes: []))
+        api.inboxUnreadCountResult = .success(7)
+
+        await coordinator.performTick()
+
+        XCTAssertEqual(account.unreadCount, 7, "count refreshes on every poll, even with no history changes")
+    }
+
+    func testTickWithoutTokensMarksNeedsReauthorization() async {
+        await coordinator.performTick()
+        XCTAssertEqual(account.authState, .needsReauthorization)
+        XCTAssertEqual(api.profileCallCount, 0)
+    }
+
+    func testMarkAsReadRemovesMessageAndRefreshesCount() async throws {
+        try await signInTestSession()
+        try auth.attachEmail("alice@example.com")
+        let message = makeEmail(id: "m1", subject: "read me")
+        account.emails = [message, makeEmail(id: "m2", subject: "keep")]
+        account.unreadCount = 10
+        api.inboxUnreadCountResult = .success(9)
+
+        await coordinator.markAsRead(message)
+
+        XCTAssertEqual(api.markedAsRead, ["m1"])
+        XCTAssertEqual(account.emails.map(\.id), ["m2"])
+        XCTAssertEqual(account.unreadCount, 9)
+    }
+
+    func testMarkAsReadFailureKeepsMessage() async throws {
+        try await signInTestSession()
+        try auth.attachEmail("alice@example.com")
+        let message = makeEmail(id: "m1", subject: "read me")
+        account.emails = [message]
+        account.unreadCount = 1
+        api.markAsReadError = AppError.api(.serverError(status: 500))
+
+        await coordinator.markAsRead(message)
+
+        XCTAssertEqual(account.emails.map(\.id), ["m1"])
+        XCTAssertEqual(account.unreadCount, 1)
+        XCTAssertEqual(account.lastError, .api(.serverError(status: 500)))
     }
 
     func testStopInvalidatesScheduler() async throws {
@@ -283,7 +341,7 @@ final class PollingCoordinatorTests: XCTestCase {
     }
 }
 
-private final class MockAPI: GmailAPIClienting, @unchecked Sendable {
+final class MockAPI: GmailAPIClienting, @unchecked Sendable {
     var profileResult: Result<GmailProfile, Error> = .failure(NSError(domain: "mock", code: 0))
     var listResult: Result<MessageListResponse, Error> = .failure(NSError(domain: "mock", code: 0))
     var historyResult: Result<HistoryResponse, Error> = .failure(NSError(domain: "mock", code: 0))
@@ -318,9 +376,17 @@ private final class MockAPI: GmailAPIClienting, @unchecked Sendable {
         inboxUnreadCallCount += 1
         return try inboxUnreadCountResult.get()
     }
+
+    var markAsReadError: Error?
+    var markedAsRead: [String] = []
+
+    func markAsRead(accessToken: String, id: String) async throws {
+        if let markAsReadError { throw markAsReadError }
+        markedAsRead.append(id)
+    }
 }
 
-private final class MockScheduler: PollScheduling, @unchecked Sendable {
+final class MockScheduler: PollScheduling, @unchecked Sendable {
     var scheduleCount = 0
     var invalidateCount = 0
     var lastAction: (@Sendable () async -> Void)?
@@ -337,8 +403,10 @@ private final class MockScheduler: PollScheduling, @unchecked Sendable {
 
 private final class RecordingNotifier: PollingNotifying, @unchecked Sendable {
     var notified: [EmailMessage] = []
+    var accounts: [String] = []
 
-    func notifyNewMessages(_ messages: [EmailMessage]) async {
+    func notifyNewMessages(_ messages: [EmailMessage], account: String) async {
         notified.append(contentsOf: messages)
+        accounts.append(account)
     }
 }

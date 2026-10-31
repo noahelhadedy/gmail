@@ -4,15 +4,13 @@ import UserNotifications
 
 @MainActor
 final class NotificationManagerTests: XCTestCase {
-    private var appState: AppState!
     private var dispatcher: RecordingDispatcher!
     private var manager: NotificationManager!
 
     override func setUp() async throws {
         try await super.setUp()
-        appState = AppState()
         dispatcher = RecordingDispatcher()
-        manager = NotificationManager(appState: appState, dispatcher: dispatcher)
+        manager = NotificationManager(dispatcher: dispatcher)
     }
 
     func testGmailURLUsesAuthuserQueryParamForMultiAccount() {
@@ -31,31 +29,56 @@ final class NotificationManagerTests: XCTestCase {
         )
     }
 
-    func testNotifySkipsWhenNotSignedIn() async {
-        appState.authState = .signedOut
-
-        await manager.notifyNewMessages([makeMessage(id: "m1", from: "A", subject: "S")])
+    func testNotifySkipsWhenAccountMissing() async {
+        await manager.notifyNewMessages([makeMessage(id: "m1", from: "A", subject: "S")], account: "")
 
         XCTAssertEqual(dispatcher.added.count, 0)
     }
 
-    func testNotifyDispatchesOnePerMessage() async {
-        appState.authState = .signedIn(email: "alice@example.com")
+    func testNotifySkipsWhenDisabledInSettings() async {
+        let disabled = NotificationManager(dispatcher: dispatcher, isEnabled: { false })
 
+        await disabled.notifyNewMessages([makeMessage(id: "m1", from: "A", subject: "S")], account: "alice@example.com")
+
+        XCTAssertEqual(dispatcher.added.count, 0)
+    }
+
+    func testNotificationSubtitleNamesAccountAndURLTargetsIt() async {
+        await manager.notifyNewMessages(
+            [makeMessage(id: "m1", from: "Alice <alice@x.com>", subject: "Hi")],
+            account: "hello@djectstudio.com"
+        )
+
+        let request = dispatcher.added.first!
+        XCTAssertEqual(request.content.title, "Alice")
+        XCTAssertEqual(request.content.subtitle, "hello@djectstudio.com")
+        XCTAssertEqual(request.content.userInfo["account"] as? String, "hello@djectstudio.com")
+        XCTAssertEqual(
+            request.content.userInfo["url"] as? String,
+            "https://mail.google.com/mail/?authuser=hello@djectstudio.com#inbox/t-m1"
+        )
+    }
+
+    func testSameMessageIdInTwoAccountsGetsTwoNotifications() async {
+        await manager.notifyNewMessages([makeMessage(id: "m1", from: "A", subject: "S")], account: "a@example.com")
+        await manager.notifyNewMessages([makeMessage(id: "m1", from: "A", subject: "S")], account: "b@example.com")
+
+        XCTAssertEqual(Set(dispatcher.added.map(\.identifier)).count, 2)
+    }
+
+    func testNotifyDispatchesOnePerMessage() async {
         await manager.notifyNewMessages([
             makeMessage(id: "m1", from: "Alice", subject: "Hi"),
             makeMessage(id: "m2", from: "Bob", subject: "Hey")
-        ])
+        ], account: "alice@example.com")
 
-        XCTAssertEqual(dispatcher.added.map(\.identifier), ["m1", "m2"])
+        XCTAssertEqual(dispatcher.added.map(\.identifier), ["alice@example.com/m1", "alice@example.com/m2"])
     }
 
     func testNotificationContentHasFromAndSubject() async {
-        appState.authState = .signedIn(email: "alice@example.com")
-
         await manager.notifyNewMessages([
             makeMessage(id: "m1", from: "Alice", subject: "Hello world")
-        ])
+        ], account: "alice@example.com")
 
         let request = dispatcher.added.first!
         XCTAssertEqual(request.content.title, "Alice")
@@ -69,11 +92,9 @@ final class NotificationManagerTests: XCTestCase {
     }
 
     func testNotificationFallsBackForEmptyHeaders() async {
-        appState.authState = .signedIn(email: "alice@example.com")
-
         await manager.notifyNewMessages([
             makeMessage(id: "m1", from: "", subject: "")
-        ])
+        ], account: "alice@example.com")
 
         let request = dispatcher.added.first!
         XCTAssertEqual(request.content.title, "New mail")

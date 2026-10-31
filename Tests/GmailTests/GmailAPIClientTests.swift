@@ -271,6 +271,22 @@ final class GmailAPIClientTests: XCTestCase {
         )
     }
 
+    func testMarkAsReadPostsModifyRemovingUnread() async throws {
+        let recorder = RequestRecorder()
+        MockURLProtocol.setHandler { request in
+            recorder.record(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"id":"m1","labelIds":["INBOX"]}"#.utf8))
+        }
+
+        try await client.markAsRead(accessToken: "tok", id: "m1")
+
+        let request = try XCTUnwrap(recorder.last)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertTrue(request.url?.path.hasSuffix("/messages/m1/modify") == true)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer tok")
+    }
+
     private static func ok() -> HTTPURLResponse {
         HTTPURLResponse(
             url: URL(string: "https://gmail.test/")!,
@@ -287,4 +303,11 @@ final class GmailAPIClientTests: XCTestCase {
 
 private final class Captured: @unchecked Sendable {
     var request: URLRequest?
+}
+
+private final class RequestRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests: [URLRequest] = []
+    func record(_ request: URLRequest) { lock.lock(); requests.append(request); lock.unlock() }
+    var last: URLRequest? { lock.lock(); defer { lock.unlock() }; return requests.last }
 }
