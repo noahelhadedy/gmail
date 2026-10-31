@@ -6,9 +6,7 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let appState = AppState()
 
-    private var auth: AuthService!
-    private var api: GmailAPIClient!
-    private var coordinator: PollingCoordinator!
+    private var accounts: AccountManager!
     private var notificationManager: NotificationManager!
     private var statusBar: StatusBarController!
     private var networkMonitor: NetworkMonitor!
@@ -18,48 +16,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let loginItems = LoginItemsManager()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let clientID = Bundle.main.object(forInfoDictionaryKey: "OAuthClientID") as? String,
-              let scheme = Bundle.main.object(forInfoDictionaryKey: "OAuthRedirectURLScheme") as? String,
-              !clientID.contains("YOUR_CLIENT_ID"), !scheme.contains("YOUR_REVERSED") else {
-            presentMissingClientIDAlert()
-            return
-        }
-        let clientSecretRaw = Bundle.main.object(forInfoDictionaryKey: "OAuthClientSecret") as? String
-        let clientSecret = (clientSecretRaw?.isEmpty == false && clientSecretRaw != "__OAUTH_CLIENT_SECRET__")
-            ? clientSecretRaw : nil
-
-        let redirectURL = URL(string: "\(scheme):/oauth2redirect")!
-        let keychain = KeychainService()
-        let authorizer = AppAuthAuthorizer(
-            clientID: clientID,
-            clientSecret: clientSecret,
-            redirectURL: redirectURL
-        )
-        auth = AuthService(keychain: keychain, authorizer: authorizer)
-        api = GmailAPIClient()
-        notificationManager = NotificationManager(appState: appState)
         settingsModel = SettingsModel()
+        notificationManager = NotificationManager(isEnabled: {
+            (UserDefaults.standard.object(forKey: SettingsModel.Keys.notificationsEnabled) as? Bool) ?? true
+        })
 
-        let scheduler = BackgroundActivityPollScheduler()
-        coordinator = PollingCoordinator(
+        // Without a client ID the app still runs (accounts list, settings, setup
+        // help) so it can be launched and checked before Google Cloud is set up.
+        accounts = AccountManager(
             appState: appState,
-            auth: auth,
-            api: api,
-            scheduler: scheduler,
+            store: AccountStore(),
+            keychain: KeychainService(),
+            authorizer: Self.makeAuthorizer(),
+            api: GmailAPIClient(),
             notifier: notificationManager
         )
-        coordinator.interval = settingsModel.pollingInterval.rawValue
+        accounts.interval = settingsModel.pollingInterval.rawValue
 
         let popoverContent = PopoverView(
             appState: appState,
-            onRefresh: { [weak self] in Task { await self?.coordinator.performTick() } },
-            onSignIn: { [weak self] in Task { await self?.signIn() } },
-            onSignOut: { [weak self] in Task { await self?.signOut() } },
+            onRefresh: { [weak self] in Task { await self?.accounts.refreshAll() } },
+            onRefreshAccount: { [weak self] email in Task { await self?.accounts.refresh(email: email) } },
+            onAddAccount: { [weak self] in Task { await self?.addAccount() } },
+            onReauthorize: { [weak self] _ in Task { await self?.addAccount() } },
+            onMarkAsRead: { [weak self] message, email in
+                Task { await self?.accounts.markAsRead(message, in: email) }
+            },
             onOpenSettings: { [weak self] in self?.openSettings() },
             onQuit: { NSApp.terminate(nil) }
         )
         statusBar = StatusBarController(appState: appState, popoverContent: popoverContent)
-        statusBar.attachPolling(coordinator)
+        statusBar.attachAccounts(accounts)
         statusBar.attachContextMenu(
             onOpenSettings: { [weak self] in self?.openSettings() },
             onQuit: { NSApp.terminate(nil) }
@@ -72,11 +59,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         Task { await notificationManager.requestAuthorization() }
 
-        Task { await restoreSession() }
+        Task { await accounts.restoreAll() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Reads the OAuth client baked into Info.plist by scripts/build.sh.
+    /// Returns nil when the build is unconfigured (placeholders still present).
+    private static func makeAuthorizer() -> AppAuthAuthorizer? {
+        guard let clientID = Bundle.main.object(forInfoDictionaryKey: "OAuthClientID") as? String,
+              let scheme = Bundle.main.object(forInfoDictionaryKey: "OAuthRedirectURLScheme") as? String,
+              clientID.hasSuffix(".apps.googleusercontent.com"),
+              !scheme.contains("__OAUTH"), !scheme.contains("YOUR_REVERSED") else {
+            return nil
+        }
+        let clientSecretRaw = Bundle.main.object(forInfoDictionaryKey: "OAuthClientSecret") as? String
+        let clientSecret = (clientSecretRaw?.isEmpty == false && clientSecretRaw != "__OAUTH_CLIENT_SECRET__")
+            ? clientSecretRaw : nil
+        return AppAuthAuthorizer(
+            clientID: clientID,
+            clientSecret: clientSecret,
+            redirectURL: URL(string: "\(scheme):/oauth2redirect")!
+        )
     }
 
     private func startNetworkObservation() {
@@ -85,47 +91,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             guard let self else { return }
             await self.networkMonitor.start()
             for await state in await self.networkMonitor.stateStream {
-                await self.coordinator.networkChanged(to: state)
+                await self.accounts.networkChanged(to: state)
             }
         }
     }
 
-    private func restoreSession() async {
-        guard let session = try? auth.restore() else { return }
-        if let email = session.email {
-            appState.authState = .signedIn(email: email)
+    /// Used for both "Add Account" and "Sign In Again": Google's account picker
+    /// decides which account comes back, and AccountManager matches it by email.
+    private func addAccount() async {
+        guard appState.isConfigured else {
+            presentMissingClientIDAlert()
+            return
         }
-        await coordinator.start()
-        await coordinator.performTick()
-    }
-
-    private func signIn() async {
         do {
-            _ = try await auth.signIn()
-            appState.lastError = nil
-            // Fresh sign-in: clear any stale history pointers from a previous account
-            // (e.g. user upgraded the binary or signed in to a different account).
-            // PollingCoordinator.fetchInitial is the only path that calls attachEmail
-            // and transitions authState to .signedIn — keeping a leftover lastHistoryId
-            // would force fetchIncremental and leave authState stuck at .signedOut.
-            UserDefaults.standard.removeObject(forKey: "lastHistoryId")
-            UserDefaults.standard.removeObject(forKey: "lastFetchTime")
-            await coordinator.start()
-            // Immediate fetch so the user sees mail within seconds rather than waiting 60s.
-            await coordinator.performTick()
-        } catch let error as AppError {
-            appState.lastError = error
+            try await accounts.addAccount()
         } catch {
-            appState.lastError = .auth(.authorizationFailed(reason: error.localizedDescription))
+            // Closing the browser sheet is a normal cancel; stay quiet about it.
+            let nsError = error as NSError
+            if nsError.domain == "org.openid.appauth.general", nsError.code == -3 { return }
+            presentError("Couldn't add the account", detail: error.localizedDescription)
         }
     }
 
-    private func signOut() async {
-        try? await auth.signOut()
-        await coordinator.stop()
-        UserDefaults.standard.removeObject(forKey: "lastHistoryId")
-        UserDefaults.standard.removeObject(forKey: "lastFetchTime")
-        appState.reset()
+    private func removeAccount(_ email: String) async {
+        await accounts.removeAccount(email: email)
     }
 
     private func openSettings() {
@@ -133,13 +122,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let view = SettingsView(
                 settings: settingsModel,
                 appState: appState,
-                onSignOut: { [weak self] in Task { await self?.signOut() } },
-                onSignIn: { [weak self] in Task { await self?.signIn() } },
+                onAddAccount: { [weak self] in Task { await self?.addAccount() } },
+                onReauthorize: { [weak self] _ in Task { await self?.addAccount() } },
+                onRemoveAccount: { [weak self] email in Task { await self?.removeAccount(email) } },
                 onLaunchAtLoginChanged: { [weak self] enabled in
                     self?.loginItems.setEnabled(enabled)
                 },
                 onPollingIntervalChanged: { [weak self] interval in
-                    self?.coordinator.interval = interval
+                    self?.accounts.interval = interval
                 }
             )
             let hosting = NSHostingController(rootView: view)
@@ -153,15 +143,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func presentMissingClientIDAlert() {
+        presentError(
+            "OAuth client ID missing",
+            detail: "Create a Google Cloud Desktop OAuth client, then rebuild with scripts/build.sh. See SETUP.md."
+        )
+    }
+
+    private func presentError(_ title: String, detail: String) {
         let alert = NSAlert()
-        alert.messageText = "OAuth client ID missing"
-        alert.informativeText = """
-        Set OAuthClientID and OAuthRedirectURLScheme in Info.plist.
-        See README.md for the build steps.
-        """
-        alert.alertStyle = .critical
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.alertStyle = .warning
+        NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
-        NSApp.terminate(nil)
     }
 
     nonisolated func userNotificationCenter(

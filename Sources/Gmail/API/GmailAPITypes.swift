@@ -34,4 +34,6 @@ protocol GmailAPIClienting: Sendable {
     /// Costs 1 quota unit. The list endpoints' resultSizeEstimate caps at maxResults
     /// across responses, so we never rely on it for the visible total.
     func getInboxUnreadCount(accessToken: String) async throws -> Int
+    /// Removes the UNREAD label from one message (messages.modify, 5 quota units).
+    func markAsRead(accessToken: String, id: String) async throws
 }

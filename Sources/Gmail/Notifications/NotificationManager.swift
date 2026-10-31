@@ -8,15 +8,15 @@ protocol NotificationDispatching: Sendable {
 
 @MainActor
 final class NotificationManager: PollingNotifying {
-    private let appState: AppState
     private let dispatcher: NotificationDispatching
+    private let isEnabled: @Sendable () -> Bool
 
     init(
-        appState: AppState,
-        dispatcher: NotificationDispatching = SystemNotificationDispatcher()
+        dispatcher: NotificationDispatching = SystemNotificationDispatcher(),
+        isEnabled: @escaping @Sendable () -> Bool = { true }
     ) {
-        self.appState = appState
         self.dispatcher = dispatcher
+        self.isEnabled = isEnabled
     }
 
     func requestAuthorization() async {
@@ -27,19 +27,23 @@ final class NotificationManager: PollingNotifying {
         }
     }
 
-    nonisolated func notifyNewMessages(_ messages: [EmailMessage]) async {
-        let email = await MainActor.run { signedInEmail() }
-        guard let email else { return }
+    /// One banner per message. The subtitle names the receiving account so it's
+    /// clear which inbox the mail landed in, and the click URL opens that account.
+    nonisolated func notifyNewMessages(_ messages: [EmailMessage], account: String) async {
+        guard !account.isEmpty, isEnabled() else { return }
         for message in messages {
             let content = UNMutableNotificationContent()
-            content.title = message.from.isEmpty ? "New mail" : message.from
+            content.title = message.from.isEmpty ? "New mail" : message.displayFrom
+            content.subtitle = account
             content.body = message.subject.isEmpty ? "(no subject)" : message.subject
+            content.threadIdentifier = account
             content.userInfo = [
                 "messageId": message.id,
-                "url": Self.gmailURL(email: email, threadId: message.threadId).absoluteString
+                "account": account,
+                "url": Self.gmailURL(email: account, threadId: message.threadId).absoluteString
             ]
             let request = UNNotificationRequest(
-                identifier: message.id,
+                identifier: "\(account)/\(message.id)",
                 content: content,
                 trigger: nil
             )
@@ -47,30 +51,8 @@ final class NotificationManager: PollingNotifying {
         }
     }
 
-    /// Builds a Gmail web URL that targets a specific thread in the right account.
-    ///
-    /// The path-based form `/mail/u/{email}/` was historically supported but
-    /// regularly fails today with "account temporarily unavailable". The
-    /// reliable disambiguator is the `?authuser={email}` query parameter,
-    /// which Google's own products (Calendar → email) use.
-    ///
-    /// We pass `threadId` because the `#inbox/{id}` fragment opens the
-    /// conversation view, which is keyed on thread, not individual message.
     nonisolated static func gmailURL(email: String, threadId: String) -> URL {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "mail.google.com"
-        components.path = "/mail/"
-        if !email.isEmpty {
-            components.queryItems = [URLQueryItem(name: "authuser", value: email)]
-        }
-        components.fragment = "inbox/\(threadId)"
-        return components.url!
-    }
-
-    private func signedInEmail() -> String? {
-        if case .signedIn(let email) = appState.authState { return email }
-        return nil
+        GmailWebURL.thread(email: email, threadId: threadId)
     }
 }
 

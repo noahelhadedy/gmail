@@ -9,7 +9,7 @@ final class StatusBarController: NSObject {
 
     private let appState: AppState
     private var observationTask: Task<Void, Never>?
-    private weak var pollingCoordinator: PollingCoordinator?
+    private weak var accountManager: AccountManager?
     private var onOpenSettings: (() -> Void)?
     private var onQuit: (() -> Void)?
 
@@ -26,8 +26,8 @@ final class StatusBarController: NSObject {
         self.popover.delegate = self
     }
 
-    func attachPolling(_ coordinator: PollingCoordinator) {
-        self.pollingCoordinator = coordinator
+    func attachAccounts(_ manager: AccountManager) {
+        self.accountManager = manager
     }
 
     func attachContextMenu(onOpenSettings: @escaping () -> Void, onQuit: @escaping () -> Void) {
@@ -56,10 +56,10 @@ final class StatusBarController: NSObject {
 
     private func currentPresentation() -> StatusBarPresentation {
         StatusBarPresenter.present(
-            unreadCount: appState.unreadCount,
-            authState: appState.authState,
+            unreadCount: appState.totalUnreadCount,
+            authState: appState.aggregateAuthState,
             connection: appState.connectionState,
-            lastError: appState.lastError
+            lastError: appState.topPriorityError
         )
     }
 
@@ -106,7 +106,7 @@ final class StatusBarController: NSObject {
         } else if let button = statusItem.button {
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            Task { await pollingCoordinator?.popoverOpened() }
+            Task { await accountManager?.popoverOpened() }
         }
     }
 
@@ -159,7 +159,7 @@ extension StatusBarController: NSPopoverDelegate {
     // never resumes.
     nonisolated func popoverDidClose(_ notification: Notification) {
         Task { @MainActor [weak self] in
-            await self?.pollingCoordinator?.popoverClosed()
+            await self?.accountManager?.popoverClosed()
         }
     }
 }

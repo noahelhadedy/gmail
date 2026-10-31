@@ -116,6 +116,15 @@ final class GmailAPIClient: GmailAPIClienting, @unchecked Sendable {
         return (json["messagesUnread"] as? Int) ?? 0
     }
 
+    /// Removes the UNREAD label from one message. Needs the gmail.modify scope.
+    func markAsRead(accessToken: String, id: String) async throws {
+        var request = makeRequest(path: "messages/\(id)/modify", queryItems: [], accessToken: accessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["removeLabelIds": ["UNREAD"]])
+        _ = try await sendJSON(request)
+    }
+
     private func makeRequest(
         path: String,
         queryItems: [URLQueryItem],

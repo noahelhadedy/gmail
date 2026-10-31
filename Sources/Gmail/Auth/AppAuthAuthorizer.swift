@@ -11,7 +11,8 @@ import AppKit
 final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
     static let googleIssuer = URL(string: "https://accounts.google.com")!
     static let revokeEndpoint = URL(string: "https://oauth2.googleapis.com/revoke")!
-    static let defaultScopes = ["https://www.googleapis.com/auth/gmail.readonly"]
+    // gmail.modify (a superset of gmail.readonly) is needed for "Mark as read".
+    static let defaultScopes = ["https://www.googleapis.com/auth/gmail.modify"]
 
     private let clientID: String
     private let clientSecret: String?
@@ -75,7 +76,7 @@ final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
         return try await withCheckedThrowingContinuation { continuation in
             OIDAuthorizationService.perform(request) { response, error in
                 if let error {
-                    continuation.resume(throwing: error)
+                    continuation.resume(throwing: Self.mapRefreshError(error))
                     return
                 }
                 guard let response, let accessToken = response.accessToken else {
@@ -173,6 +174,15 @@ final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
         private var stored: UncheckedConfig?
         func get() -> UncheckedConfig? { stored }
         func set(_ value: OIDServiceConfiguration) { stored = UncheckedConfig(value: value) }
+    }
+
+    /// Connectivity failures must not look like a revoked token, otherwise a
+    /// laptop waking up offline would wipe every account's refresh token.
+    private static func mapRefreshError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        let isNetwork = nsError.domain == NSURLErrorDomain
+            || (nsError.domain == OIDGeneralErrorDomain && nsError.code == OIDErrorCode.networkError.rawValue)
+        return isNetwork ? AppError.network(.unknown(reason: nsError.localizedDescription)) : error
     }
 
     private static func session(from authState: OIDAuthState) throws -> AuthSession {

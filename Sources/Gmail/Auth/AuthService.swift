@@ -2,7 +2,7 @@ import Foundation
 
 @MainActor
 final class AuthService {
-    static let lastEmailDefaultsKey = "auth.lastSignedInEmail"
+    nonisolated static let lastEmailDefaultsKey = "auth.lastSignedInEmail"
 
     private let keychain: KeychainService
     private let authorizer: AuthorizationPerforming
@@ -113,6 +113,9 @@ final class AuthService {
             try persist(merged, account: accountKey(for: merged))
             self.session = merged
             return merged.accessToken
+        } catch let error as AppError where error.priority == .network {
+            // Offline or flaky network: keep the tokens and try again next tick.
+            throw error
         } catch {
             self.session = nil
             try? keychain.delete(account: accountKey(for: current))

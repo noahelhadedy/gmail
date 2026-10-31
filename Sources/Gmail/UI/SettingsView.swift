@@ -51,13 +51,35 @@ final class SettingsModel {
 struct SettingsView: View {
     @Bindable var settings: SettingsModel
     @Bindable var appState: AppState
-    let onSignOut: () -> Void
-    let onSignIn: () -> Void
+    let onAddAccount: () -> Void
+    let onReauthorize: (String) -> Void
+    let onRemoveAccount: (String) -> Void
     let onLaunchAtLoginChanged: (Bool) -> Void
     let onPollingIntervalChanged: (TimeInterval) -> Void
 
+    @State private var pendingRemoval: String?
+
     var body: some View {
         Form {
+            Section {
+                if appState.accounts.isEmpty {
+                    Text(appState.isConfigured
+                         ? "No accounts yet."
+                         : "OAuth client ID missing. See SETUP.md.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(appState.accounts) { account in
+                    accountRow(account)
+                }
+                Button("Add Account\u{2026}", action: onAddAccount)
+                    .disabled(!appState.isConfigured)
+            } header: {
+                Text("Accounts")
+            } footer: {
+                Text("Each account signs in separately and is checked on its own.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Polling") {
                 Picker("Check for mail every", selection: Binding(
                     get: { settings.pollingInterval },
@@ -83,16 +105,54 @@ struct SettingsView: View {
                     }
                 ))
             }
-            Section("Account") {
-                if case .signedIn(let email) = appState.authState {
-                    LabeledContent("Signed in as", value: email)
-                    Button("Sign out", role: .destructive, action: onSignOut)
-                } else {
-                    Button("Connect Gmail", action: onSignIn)
-                }
-            }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 360)
+        .frame(width: 480, height: 520)
+        .confirmationDialog(
+            "Remove \(pendingRemoval ?? "")?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            )
+        ) {
+            Button("Remove Account", role: .destructive) {
+                if let email = pendingRemoval { onRemoveAccount(email) }
+                pendingRemoval = nil
+            }
+        } message: {
+            Text("Its sign-in is revoked and removed from this Mac. Your mail in Gmail is not touched.")
+        }
+    }
+
+    private func accountRow(_ account: AccountState) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(AccountColor.color(for: account.colorIndex))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(account.email)
+                if account.needsReauthorization {
+                    Label("Needs sign-in", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                } else {
+                    Text(account.unreadCount == 1 ? "1 unread" : "\(account.unreadCount) unread")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if account.needsReauthorization {
+                Button("Sign In Again") { onReauthorize(account.email) }
+                    .disabled(!appState.isConfigured)
+            }
+            Button {
+                pendingRemoval = account.email
+            } label: {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove account")
+        }
     }
 }
