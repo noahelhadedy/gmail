@@ -44,6 +44,24 @@ final class AccountManagerTests: XCTestCase {
         XCTAssertEqual(AccountStore(defaults: defaults).load().map(\.email), ["a@example.com"])
     }
 
+    func testExternalBrowserModeReachesAuthorizerAndReportsChanges() async throws {
+        signInAs("a@example.com", historyId: "10")
+        var changes = 0
+        manager.onAccountsChanged = { changes += 1 }
+
+        let email = try await manager.addAccount(mode: .externalBrowser(loginHint: "a@example.com"))
+
+        XCTAssertEqual(email, "a@example.com")
+        XCTAssertEqual(authorizer.lastSignInMode, .externalBrowser(loginHint: "a@example.com"))
+        XCTAssertGreaterThan(changes, 0, "a poll tick should refresh the status file")
+    }
+
+    func testDefaultAddAccountUsesInAppSheet() async throws {
+        signInAs("a@example.com", historyId: "10")
+        _ = try await manager.addAccount()
+        XCTAssertEqual(authorizer.lastSignInMode, .inApp)
+    }
+
     func testTwoAccountsAreIndependentAndTotalsAdd() async throws {
         signInAs("a@example.com", historyId: "10")
         api.inboxUnreadCountResult = .success(4)

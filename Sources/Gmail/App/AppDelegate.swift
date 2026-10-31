@@ -14,6 +14,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var settingsModel: SettingsModel!
     private var settingsWindow: NSWindowController?
     private let loginItems = LoginItemsManager()
+    private var authorizer: AppAuthAuthorizer?
+    /// Nil in demo mode so sample data never lands in the real status file.
+    private var statusWriter: AutomationStatusWriter?
+    /// URLs can arrive before launch finishes when `open` starts the app.
+    private var pendingCommands: [AutomationCommand] = []
+    private var automationAddTask: Task<Void, Never>?
+    private var didFinishLaunching = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settingsModel = SettingsModel()
@@ -23,11 +30,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // Without a client ID the app still runs (accounts list, settings, setup
         // help) so it can be launched and checked before Google Cloud is set up.
+        authorizer = Self.makeAuthorizer()
         accounts = AccountManager(
             appState: appState,
             store: AccountStore(),
             keychain: KeychainService(),
-            authorizer: Self.makeAuthorizer(),
+            authorizer: authorizer,
             api: GmailAPIClient(),
             notifier: notificationManager
         )
@@ -61,9 +69,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         if DemoData.isEnabled {
             DemoData.populate(appState)
+            didFinishLaunching = true
             return
         }
-        Task { await accounts.restoreAll() }
+
+        // A flow left over from a previous run can never complete.
+        AutomationFiles.remove(AutomationFiles.pendingAuthURL)
+        let writer = AutomationStatusWriter(appState: appState)
+        statusWriter = writer
+        accounts.onAccountsChanged = { writer.write() }
+
+        Task {
+            await accounts.restoreAll()
+            writer.write()
+        }
+        didFinishLaunching = true
+        let queued = pendingCommands
+        pendingCommands = []
+        queued.forEach(handle)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let command = AutomationCommand(url: url) else { continue }
+            if didFinishLaunching {
+                handle(command)
+            } else {
+                pendingCommands.append(command)
+            }
+        }
+    }
+
+    private func handle(_ command: AutomationCommand) {
+        guard let statusWriter else { return }
+        switch command {
+        case .status:
+            statusWriter.write()
+        case .addAccount(let loginHint):
+            // A newer request replaces a pending one (e.g. the wrong account was
+            // picked or the browser tab was closed).
+            let previous = automationAddTask
+            authorizer?.cancelExternalAuthorization()
+            automationAddTask = Task { [weak self] in
+                await previous?.value
+                await self?.addAccountExternally(loginHint: loginHint)
+            }
+        }
+    }
+
+    /// Scriptable sign-in: no sheet and no alerts. The consent URL lands in
+    /// pending-auth-url.txt and the outcome in accounts-status.json.
+    private func addAccountExternally(loginHint: String?) async {
+        guard let statusWriter else { return }
+        statusWriter.addAccountInProgress = true
+        statusWriter.write()
+        defer {
+            statusWriter.addAccountInProgress = false
+            statusWriter.write()
+        }
+        do {
+            let email = try await accounts.addAccount(mode: .externalBrowser(loginHint: loginHint))
+            statusWriter.recordAddAccount(email: email, loginHint: loginHint, error: nil)
+        } catch {
+            statusWriter.recordAddAccount(email: nil, loginHint: loginHint, error: error)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -108,8 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
         do {
-            try await accounts.addAccount()
+            let email = try await accounts.addAccount()
+            statusWriter?.recordAddAccount(email: email, loginHint: nil, error: nil)
         } catch {
+            statusWriter?.recordAddAccount(email: nil, loginHint: nil, error: error)
             // Closing the browser sheet is a normal cancel; stay quiet about it.
             let nsError = error as NSError
             if nsError.domain == "org.openid.appauth.general", nsError.code == -3 { return }

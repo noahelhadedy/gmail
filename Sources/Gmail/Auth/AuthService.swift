@@ -53,8 +53,8 @@ final class AuthService {
         return nil
     }
 
-    func signIn() async throws -> AuthSession {
-        let session = try await authorizer.performInitialAuthorization()
+    func signIn(mode: SignInMode = .inApp) async throws -> AuthSession {
+        let session = try await authorizer.performInitialAuthorization(mode: mode)
         try persist(session, account: KeychainService.pendingAccount)
         self.session = session
         return session

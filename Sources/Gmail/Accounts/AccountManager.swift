@@ -17,6 +17,9 @@ final class AccountManager {
     private let makeScheduler: SchedulerFactory
 
     private(set) var coordinators: [String: PollingCoordinator] = [:]
+    /// Called after every poll tick of any account (used to refresh the
+    /// automation status file).
+    var onAccountsChanged: (@MainActor () -> Void)?
     /// Sign-ins share Keychain's `__pending__` slot until the email is known,
     /// so only one may run at a time.
     private var isAddingAccount = false
@@ -69,7 +72,7 @@ final class AccountManager {
     /// then stores tokens under that email. Signing in to an account that's
     /// already listed replaces its tokens (this is how "Sign in again" works).
     @discardableResult
-    func addAccount() async throws -> String {
+    func addAccount(mode: SignInMode = .inApp) async throws -> String {
         guard authorizer != nil else {
             throw AppError.auth(.authorizationFailed(reason: "OAuth client ID missing"))
         }
@@ -79,7 +82,7 @@ final class AccountManager {
         isAddingAccount = true
         defer { isAddingAccount = false }
         let auth = makeAuthService()
-        let session = try await auth.signIn()
+        let session = try await auth.signIn(mode: mode)
         let profile: GmailProfile
         do {
             profile = try await api.getProfile(accessToken: session.accessToken)
@@ -128,6 +131,7 @@ final class AccountManager {
         coordinators[account.email] = nil
         store.remove(email: account.email)
         appState.accounts.removeAll { $0.email == account.email }
+        onAccountsChanged?()
     }
 
     func refreshAll() async {
@@ -176,6 +180,7 @@ final class AccountManager {
             userDefaults: userDefaults
         )
         coordinator.interval = interval
+        coordinator.onTickFinished = { [weak self] in self?.onAccountsChanged?() }
         coordinators[state.email] = coordinator
         if !appState.accounts.contains(where: { $0 === state }) {
             appState.accounts.append(state)
@@ -194,7 +199,7 @@ final class AccountManager {
 /// Stand-in used when the build has no OAuth client ID. Restoring or removing
 /// accounts still works; anything that talks to Google fails cleanly.
 private struct UnconfiguredAuthorizer: AuthorizationPerforming {
-    func performInitialAuthorization() async throws -> AuthSession {
+    func performInitialAuthorization(mode: SignInMode) async throws -> AuthSession {
         throw AppError.auth(.authorizationFailed(reason: "OAuth client ID missing"))
     }
 

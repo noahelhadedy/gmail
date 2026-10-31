@@ -7,6 +7,7 @@ Noah's own menu bar app, personal stream. Read HANDOFF.md first for status and w
 - Multi-account: `AppState.accounts: [AccountState]`; `AccountManager` owns one `AuthService` + `PollingCoordinator` per account. Never let one account's error touch another's state.
 - OAuth client is never in the repo: `scripts/build.sh` reads Keychain items `gmail-menubar-client-id` / `gmail-menubar-client-secret` (setup steps in SETUP.md, Arabic).
 - Native macOS look only: system fonts, SF Symbols, system colors and materials. No gradients, glows or custom chips.
+- Scriptable sign-in: `open "gmailmenubar://add-account?login_hint=<email>"` writes the consent URL to `~/Library/Application Support/Gmail/pending-auth-url.txt` (loopback redirect, no browser opened); `open "gmailmenubar://status"` writes `accounts-status.json` there. No tokens ever go in those files. Details in HANDOFF.md section 4.
 - `swift test` must stay green. UI check: `ALLOW_UNCONFIGURED=1 ./scripts/build.sh && GMAIL_DEMO=1 ./Gmail.app/Contents/MacOS/Gmail`.
 
 

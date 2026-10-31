@@ -7,9 +7,11 @@ final class MockAuthorizer: AuthorizationPerforming, @unchecked Sendable {
     var revokeError: Error?
     var refreshCallCount = 0
     var revokeCallCount = 0
+    var lastSignInMode: SignInMode?
 
-    func performInitialAuthorization() async throws -> AuthSession {
-        try initialResult.get()
+    func performInitialAuthorization(mode: SignInMode) async throws -> AuthSession {
+        lastSignInMode = mode
+        return try initialResult.get()
     }
 
     func performTokenRefresh(refreshToken: String) async throws -> AuthSession {

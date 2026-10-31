@@ -24,6 +24,8 @@ protocol PollingNotifying: Sendable {
 final class PollingCoordinator {
     private(set) var state: PollingState = .idle
     var interval: TimeInterval = 60
+    /// Runs after every tick, whatever its outcome.
+    var onTickFinished: (@MainActor () -> Void)?
 
     let account: AccountState
     private let auth: AuthService
@@ -115,6 +117,7 @@ final class PollingCoordinator {
     }
 
     func performTick() async {
+        defer { onTickFinished?() }
         guard auth.session != nil else {
             // Tokens are gone (revoked, or missing after relaunch): nothing to poll
             // until the user signs this account in again.

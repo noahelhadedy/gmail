@@ -28,6 +28,15 @@ final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
     /// becomes a no-op even though Safari completes the flow.
     nonisolated(unsafe) private var currentAuthorizationFlow: OIDExternalUserAgentSession?
 
+    /// Loopback listener for the scriptable `.externalBrowser` flow. Retained
+    /// for the flow's lifetime; its HTTP server delivers Google's redirect.
+    nonisolated(unsafe) private var loopbackHandler: OIDRedirectHTTPHandler?
+    nonisolated(unsafe) private var loopbackTimeout: Task<Void, Never>?
+    nonisolated(unsafe) private var loopbackTimedOut = false
+
+    /// How long an external-browser sign-in may wait for Google's redirect.
+    static let externalFlowTimeout: TimeInterval = 5 * 60
+
     init(
         clientID: String,
         clientSecret: String? = nil,
@@ -42,8 +51,11 @@ final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
         self.urlSession = urlSession
     }
 
-    func performInitialAuthorization() async throws -> AuthSession {
+    func performInitialAuthorization(mode: SignInMode) async throws -> AuthSession {
         let configuration = try await discoverConfiguration()
+        if case .externalBrowser(let loginHint) = mode {
+            return try await presentLoopbackAuthorization(configuration: configuration, loginHint: loginHint)
+        }
         let request = OIDAuthorizationRequest(
             configuration: configuration,
             clientId: clientID,
@@ -141,6 +153,87 @@ final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
         }
     }
 
+    /// Cancels a pending external-browser sign-in, if any. Its caller gets
+    /// AppAuth's "program canceled" error.
+    @MainActor
+    func cancelExternalAuthorization() {
+        loopbackHandler?.cancelHTTPListener()
+    }
+
+    /// Desktop OAuth clients accept http://127.0.0.1:<any port>/ as a redirect.
+    /// The authorization URL goes to a file instead of a browser so another
+    /// tool can open it in a browser it controls.
+    @MainActor
+    private func presentLoopbackAuthorization(
+        configuration: OIDServiceConfiguration,
+        loginHint: String?
+    ) async throws -> AuthSession {
+        let handler = OIDRedirectHTTPHandler(successURL: nil)
+        var listenerError: NSError?
+        let redirect: URL? = handler.startHTTPListener(&listenerError)
+        guard let redirect, listenerError == nil else {
+            throw listenerError ?? AppError.auth(.authorizationFailed(reason: "loopback listener failed"))
+        }
+        var parameters = [
+            "access_type": "offline",
+            "prompt": "consent"
+        ]
+        if let loginHint { parameters["login_hint"] = loginHint }
+        let request = OIDAuthorizationRequest(
+            configuration: configuration,
+            clientId: clientID,
+            clientSecret: clientSecret,
+            scopes: scopes,
+            redirectURL: redirect,
+            responseType: OIDResponseTypeCode,
+            additionalParameters: parameters
+        )
+        let pendingFile = AutomationFiles.pendingAuthURL
+        loopbackHandler = handler
+        loopbackTimedOut = false
+
+        return try await withCheckedThrowingContinuation { continuation in
+            handler.currentAuthorizationFlow = OIDAuthState.authState(
+                byPresenting: request,
+                externalUserAgent: AuthURLFileUserAgent(fileURL: pendingFile)
+            ) { [weak self] authState, error in
+                let timedOut = self?.loopbackTimedOut ?? false
+                self?.loopbackTimeout?.cancel()
+                self?.loopbackTimeout = nil
+                self?.loopbackHandler = nil
+                handler.stopHTTPListenerIfRunning()
+                AutomationFiles.remove(pendingFile)
+                if timedOut {
+                    continuation.resume(throwing: AppError.auth(.authorizationFailed(
+                        reason: "timed out after \(Int(Self.externalFlowTimeout / 60)) minutes"
+                    )))
+                    return
+                }
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let authState else {
+                    continuation.resume(
+                        throwing: AppError.auth(.authorizationFailed(reason: "no auth state"))
+                    )
+                    return
+                }
+                do {
+                    continuation.resume(returning: try Self.session(from: authState))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            loopbackTimeout = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(Self.externalFlowTimeout * 1_000_000_000))
+                guard !Task.isCancelled, let self, self.loopbackHandler === handler else { return }
+                self.loopbackTimedOut = true
+                handler.cancelHTTPListener()
+            }
+        }
+    }
+
     private func discoverConfiguration() async throws -> OIDServiceConfiguration {
         if let cached = await configurationCache.get() {
             return cached.value
@@ -198,5 +291,41 @@ final class AppAuthAuthorizer: AuthorizationPerforming, @unchecked Sendable {
             expiresAt: expiresAt,
             email: nil
         )
+    }
+}
+
+/// "Opens" the consent page by writing its URL to a file (mode 0600) for
+/// another tool to visit. The URL holds only the client ID, state and PKCE
+/// challenge, never a secret.
+private final class AuthURLFileUserAgent: NSObject, OIDExternalUserAgent {
+    private let fileURL: URL
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    func present(_ request: OIDExternalUserAgentRequest, session: OIDExternalUserAgentSession) -> Bool {
+        guard let data = request.externalUserAgentRequestURL().absoluteString.data(using: .utf8) else {
+            return false
+        }
+        do {
+            try AutomationFiles.writePrivate(data, to: fileURL)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func dismiss(animated: Bool, completion: @escaping () -> Void) {
+        completion()
+    }
+}
+
+private extension OIDRedirectHTTPHandler {
+    /// `stopHTTPListener` is private in AppAuth; cancelling with no current
+    /// flow just stops the server.
+    func stopHTTPListenerIfRunning() {
+        currentAuthorizationFlow = nil
+        cancelHTTPListener()
     }
 }
