@@ -59,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         Task { await notificationManager.requestAuthorization() }
 
+        if DemoData.isEnabled {
+            DemoData.populate(appState)
+            return
+        }
         Task { await accounts.restoreAll() }
     }
 

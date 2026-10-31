@@ -52,6 +52,7 @@ struct PopoverView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
             .disabled(isLoading || appState.accounts.isEmpty)
             .help("Check all accounts now")
         }

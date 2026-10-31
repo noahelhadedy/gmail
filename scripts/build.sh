@@ -5,38 +5,55 @@ set -euo pipefail
 # client ID into Info.plist. Requires Swift 6.0+ and macOS 14+.
 #
 # Usage:
-#   OAUTH_CLIENT_ID="123-abc.apps.googleusercontent.com" ./scripts/build.sh
+#   ./scripts/build.sh                      # reads the client from Keychain
+#   OAUTH_CLIENT_ID="123-abc.apps.googleusercontent.com" \
+#   OAUTH_CLIENT_SECRET="GOCSPX-..." ./scripts/build.sh
 #
 # After building, move Gmail.app to /Applications and launch via Spotlight or
 # `open Gmail.app`.
 
+# Resolution order for the OAuth client: env vars, then macOS Keychain items
+# saved with ~/noah-brain/bin/save-secret (see SETUP.md). Nothing is ever
+# written to the repo; the values only land in the gitignored Gmail.app bundle.
+KEYCHAIN_ID_NAME="gmail-menubar-client-id"
+KEYCHAIN_SECRET_NAME="gmail-menubar-client-secret"
+
 CLIENT_ID="${OAUTH_CLIENT_ID:-}"
 CLIENT_SECRET="${OAUTH_CLIENT_SECRET:-}"
+if [[ -z "$CLIENT_ID" ]]; then
+    CLIENT_ID="$(security find-generic-password -s "$KEYCHAIN_ID_NAME" -w 2>/dev/null || true)"
+fi
+if [[ -z "$CLIENT_SECRET" ]]; then
+    CLIENT_SECRET="$(security find-generic-password -s "$KEYCHAIN_SECRET_NAME" -w 2>/dev/null || true)"
+fi
+
 if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
-    echo "ERROR: Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET before building."
-    echo
-    echo "How to get them:"
-    echo "  1. Visit https://console.cloud.google.com/apis/credentials"
-    echo "  2. Create OAuth 2.0 Client ID, type = Desktop app"
-    echo "  3. Copy both the Client ID and Client Secret"
-    echo
-    echo "Then re-run:"
-    echo "  OAUTH_CLIENT_ID=\"<id>.apps.googleusercontent.com\" \\"
-    echo "  OAUTH_CLIENT_SECRET=\"GOCSPX-...\" \\"
-    echo "  ./scripts/build.sh"
-    echo
-    echo "Note: Google treats Desktop app secrets as non-confidential, but you"
-    echo "      should still keep them out of public repos. The secret lands in"
-    echo "      Gmail.app/Contents/Info.plist (the bundle is gitignored)."
-    exit 1
+    if [[ "${ALLOW_UNCONFIGURED:-}" != "1" ]]; then
+        echo "ERROR: No OAuth client found (env vars or Keychain)."
+        echo
+        echo "Follow SETUP.md, then save both values to Keychain:"
+        echo "  ~/noah-brain/bin/save-secret $KEYCHAIN_ID_NAME \"Gmail OAuth Client ID\""
+        echo "  ~/noah-brain/bin/save-secret $KEYCHAIN_SECRET_NAME \"Gmail OAuth Client Secret\""
+        echo
+        echo "Or pass them as env vars:"
+        echo "  OAUTH_CLIENT_ID=\"<id>.apps.googleusercontent.com\" \\"
+        echo "  OAUTH_CLIENT_SECRET=\"GOCSPX-...\" \\"
+        echo "  ./scripts/build.sh"
+        echo
+        echo "To build a UI-only app with no Google sign-in: ALLOW_UNCONFIGURED=1 ./scripts/build.sh"
+        exit 1
+    fi
+    echo "WARNING: building without an OAuth client. The app will show setup help only."
+    CLIENT_ID="__OAUTH_CLIENT_ID__"
+    CLIENT_SECRET="__OAUTH_CLIENT_SECRET__"
+    REVERSED="__OAUTH_REVERSED_ID__"
+else
+    if [[ "$CLIENT_ID" != *.apps.googleusercontent.com ]]; then
+        echo "ERROR: OAuth client ID must end with .apps.googleusercontent.com"
+        exit 1
+    fi
+    REVERSED="${CLIENT_ID%.apps.googleusercontent.com}"
 fi
-
-if [[ "$CLIENT_ID" != *.apps.googleusercontent.com ]]; then
-    echo "ERROR: OAUTH_CLIENT_ID must end with .apps.googleusercontent.com"
-    exit 1
-fi
-
-REVERSED="${CLIENT_ID%.apps.googleusercontent.com}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
