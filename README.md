@@ -29,7 +29,10 @@ This app does one thing: tells you when new mail arrives. Click the notification
 - **Quad empty states** — signed-out, needs reauthorization, inbox zero, error with retry
 - **Configurable polling** — 60s default, 120s / 5min / 10min via Settings
 - **Launch at login** — SMAppService toggle in Settings
-- **Multi-account-safe URLs** — notification clicks open the right inbox even with multiple Google sessions
+- **Multiple accounts** — add any number of Google accounts; each is polled on its own and can fail or need sign-in without affecting the others
+- **Total unread in the menu bar** — sum of every account's INBOX unread count, hidden at zero
+- **Grouped popover** — one section per account (color dot + unread count), latest 5 unread with snippet, Open Inbox, Mark as read
+- **Multi-account-safe URLs** — every click opens the right inbox via `?authuser=<email>`
 
 ## System Requirements
 
@@ -97,7 +100,6 @@ swift test
 
 See [TODOS.md](TODOS.md) for deferred work, including:
 
-- Multi-account support
 - Quick Look message preview (spacebar)
 - `.dmg` distribution + Homebrew cask
 - Sparkle auto-update
