@@ -55,6 +55,23 @@ else
     REVERSED="${CLIENT_ID%.apps.googleusercontent.com}"
 fi
 
+# Zoho Mail is optional: with both Keychain items (or env vars) the app gets
+# "Add Zoho Account"; without them that entry point is simply hidden.
+# See SETUP-ZOHO.md.
+ZOHO_ID="${ZOHO_CLIENT_ID:-}"
+ZOHO_SECRET="${ZOHO_CLIENT_SECRET:-}"
+if [[ -z "$ZOHO_ID" ]]; then
+    ZOHO_ID="$(security find-generic-password -s "zoho-menubar-client-id" -w 2>/dev/null || true)"
+fi
+if [[ -z "$ZOHO_SECRET" ]]; then
+    ZOHO_SECRET="$(security find-generic-password -s "zoho-menubar-client-secret" -w 2>/dev/null || true)"
+fi
+if [[ -z "$ZOHO_ID" || -z "$ZOHO_SECRET" ]]; then
+    echo "Note: no Zoho client in Keychain, building without Zoho (see SETUP-ZOHO.md)."
+    ZOHO_ID="__ZOHO_CLIENT_ID__"
+    ZOHO_SECRET="__ZOHO_CLIENT_SECRET__"
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -75,6 +92,8 @@ sed \
     -e "s|__OAUTH_CLIENT_ID__|${CLIENT_ID}|g" \
     -e "s|__OAUTH_CLIENT_SECRET__|${CLIENT_SECRET}|g" \
     -e "s|__OAUTH_REVERSED_ID__|${REVERSED}|g" \
+    -e "s|__ZOHO_CLIENT_ID__|${ZOHO_ID}|g" \
+    -e "s|__ZOHO_CLIENT_SECRET__|${ZOHO_SECRET}|g" \
     "$REPO_ROOT/scripts/Info.plist.template" > "$APP/Contents/Info.plist"
 
 echo

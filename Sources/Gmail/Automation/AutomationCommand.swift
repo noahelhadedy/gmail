@@ -7,6 +7,9 @@ enum AutomationCommand: Equatable {
 
     /// `gmailmenubar://add-account?login_hint=<email>` (login_hint optional).
     case addAccount(loginHint: String?)
+    /// `gmailmenubar://add-zoho-account?login_hint=<email>` (login_hint optional):
+    /// same loopback flow as add-account, but for a Zoho Mail mailbox.
+    case addZohoAccount(loginHint: String?)
     /// `gmailmenubar://status`: rewrite accounts-status.json now.
     case status
 
@@ -18,11 +21,12 @@ enum AutomationCommand: Equatable {
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .lowercased()
         switch name {
-        case "add-account":
+        case "add-account", "add-zoho-account":
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             let hint = items.first { $0.name == "login_hint" }?.value?
                 .trimmingCharacters(in: .whitespaces)
-            self = .addAccount(loginHint: (hint?.isEmpty ?? true) ? nil : hint)
+            let loginHint = (hint?.isEmpty ?? true) ? nil : hint
+            self = name == "add-account" ? .addAccount(loginHint: loginHint) : .addZohoAccount(loginHint: loginHint)
         case "status":
             self = .status
         default:

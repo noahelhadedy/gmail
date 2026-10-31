@@ -16,6 +16,12 @@ final class AutomationCommandTests: XCTestCase {
         XCTAssertEqual(AutomationCommand(url: url), .addAccount(loginHint: nil))
     }
 
+    func testAddZohoAccountWithLoginHint() {
+        let url = URL(string: "gmailmenubar://add-zoho-account?login_hint=hello@designbookmark.com")!
+        XCTAssertEqual(AutomationCommand(url: url), .addZohoAccount(loginHint: "hello@designbookmark.com"))
+        XCTAssertEqual(AutomationCommand(url: URL(string: "gmailmenubar://add-zoho-account")!), .addZohoAccount(loginHint: nil))
+    }
+
     func testStatus() {
         XCTAssertEqual(AutomationCommand(url: URL(string: "gmailmenubar://status")!), .status)
         XCTAssertEqual(AutomationCommand(url: URL(string: "GMAILMENUBAR://Status")!), .status)
@@ -75,7 +81,8 @@ final class AutomationStatusTests: XCTestCase {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(Set(object.keys), ["updatedAt", "addAccountInProgress", "accounts", "lastAddAccount"])
         let account = try XCTUnwrap((object["accounts"] as? [[String: Any]])?.first)
-        XCTAssertEqual(Set(account.keys), ["email", "state", "unreadCount"])
+        XCTAssertEqual(Set(account.keys), ["email", "state", "unreadCount", "provider"])
+        XCTAssertEqual(account["provider"] as? String, "gmail")
         XCTAssertEqual(account["state"] as? String, "ok")
     }
 

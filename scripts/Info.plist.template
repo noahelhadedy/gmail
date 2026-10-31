@@ -34,6 +34,10 @@
     <string>__OAUTH_CLIENT_SECRET__</string>
     <key>OAuthRedirectURLScheme</key>
     <string>com.googleusercontent.apps.__OAUTH_REVERSED_ID__</string>
+    <key>ZohoClientID</key>
+    <string>__ZOHO_CLIENT_ID__</string>
+    <key>ZohoClientSecret</key>
+    <string>__ZOHO_CLIENT_SECRET__</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

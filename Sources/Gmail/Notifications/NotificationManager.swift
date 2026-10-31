@@ -30,6 +30,16 @@ final class NotificationManager: PollingNotifying {
     /// One banner per message. The subtitle names the receiving account so it's
     /// clear which inbox the mail landed in, and the click URL opens that account.
     nonisolated func notifyNewMessages(_ messages: [EmailMessage], account: String) async {
+        await notifyNewMessages(messages, account: account) { message in
+            Self.gmailURL(email: account, threadId: message.threadId)
+        }
+    }
+
+    nonisolated func notifyNewMessages(
+        _ messages: [EmailMessage],
+        account: String,
+        openURL: @escaping @Sendable (EmailMessage) -> URL
+    ) async {
         guard !account.isEmpty, isEnabled() else { return }
         for message in messages {
             let content = UNMutableNotificationContent()
@@ -40,7 +50,7 @@ final class NotificationManager: PollingNotifying {
             content.userInfo = [
                 "messageId": message.id,
                 "account": account,
-                "url": Self.gmailURL(email: account, threadId: message.threadId).absoluteString
+                "url": openURL(message).absoluteString
             ]
             let request = UNNotificationRequest(
                 identifier: "\(account)/\(message.id)",

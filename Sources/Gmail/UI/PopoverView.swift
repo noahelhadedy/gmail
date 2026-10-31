@@ -18,6 +18,7 @@ struct PopoverView: View {
     let onRefresh: () -> Void
     let onRefreshAccount: (String) -> Void
     let onAddAccount: () -> Void
+    let onAddZohoAccount: () -> Void
     let onReauthorize: (String) -> Void
     let onMarkAsRead: (EmailMessage, String) -> Void
     let onOpenSettings: () -> Void
@@ -116,8 +117,9 @@ struct PopoverView: View {
             ForEach(account.emails.prefix(Self.messagesPerAccount)) { message in
                 MessageRow(
                     message: message,
+                    providerName: account.provider.displayName,
                     onOpen: {
-                        NSWorkspace.shared.open(GmailWebURL.thread(email: account.email, threadId: message.threadId))
+                        NSWorkspace.shared.open(account.webURL(for: message))
                     },
                     onMarkAsRead: { onMarkAsRead(message, account.email) }
                 )
@@ -126,7 +128,7 @@ struct PopoverView: View {
         if !account.needsReauthorization {
             OpenInboxRow(
                 hiddenCount: max(0, account.unreadCount - min(account.emails.count, Self.messagesPerAccount)),
-                action: { NSWorkspace.shared.open(GmailWebURL.inbox(email: account.email)) }
+                action: { NSWorkspace.shared.open(account.inboxURL) }
             )
         }
     }
@@ -175,12 +177,7 @@ struct PopoverView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer()
-            Button(action: onAddAccount) {
-                Image(systemName: "person.crop.circle.badge.plus")
-            }
-            .buttonStyle(.plain)
-            .disabled(!appState.isConfigured)
-            .help("Add Google account")
+            addAccountControl
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
             }
@@ -194,6 +191,31 @@ struct PopoverView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// One button for Gmail only; a menu once the build can also add Zoho.
+    @ViewBuilder
+    private var addAccountControl: some View {
+        if appState.isZohoConfigured {
+            Menu {
+                Button("Add Gmail Account\u{2026}", action: onAddAccount)
+                    .disabled(!appState.isConfigured)
+                Button("Add Zoho Account\u{2026}", action: onAddZohoAccount)
+            } label: {
+                Image(systemName: "person.crop.circle.badge.plus")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Add account")
+        } else {
+            Button(action: onAddAccount) {
+                Image(systemName: "person.crop.circle.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .disabled(!appState.isConfigured)
+            .help("Add Google account")
+        }
     }
 
     private var footerText: String {
@@ -305,6 +327,7 @@ private struct OpenInboxRow: View {
 
 private struct MessageRow: View {
     let message: EmailMessage
+    let providerName: String
     let onOpen: () -> Void
     let onMarkAsRead: () -> Void
     @State private var isHovered = false
@@ -336,7 +359,7 @@ private struct MessageRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Open in Gmail")
+            .help("Open in \(providerName)")
 
             Button(action: onMarkAsRead) {
                 Image(systemName: "envelope.open")
@@ -354,7 +377,7 @@ private struct MessageRow: View {
         .background(isHovered ? Color.primary.opacity(0.06) : Color.clear)
         .onHover { isHovered = $0 }
         .contextMenu {
-            Button("Open in Gmail", action: onOpen)
+            Button("Open in \(providerName)", action: onOpen)
             Button("Mark as Read", action: onMarkAsRead)
         }
     }

@@ -40,7 +40,15 @@ enum DemoData {
 
         let expired = AccountState(email: "old@workspace.com", colorIndex: 3, authState: .needsReauthorization)
 
-        appState.accounts = [personal, studio, work, expired]
+        let zoho = AccountState(email: "hello@brand.com", colorIndex: 4, provider: .zoho, dataCenter: .com)
+        zoho.unreadCount = 3
+        zoho.emails = [
+            message("z1", "Customer <customer@example.com>", "Question about my order", "Hi, I bought the kit yesterday and could not find the download link.", minutesAgo: 22),
+            message("z2", "Stripe <notifications@stripe.com>", "Payout sent", "Your payout is on its way to your bank account.", minutesAgo: 180)
+        ]
+
+        appState.accounts = [personal, studio, work, expired, zoho]
+        appState.isZohoConfigured = true
         appState.connectionState = .online
         appState.isConfigured = true
     }

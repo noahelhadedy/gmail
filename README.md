@@ -22,6 +22,7 @@ This app does one thing: tells you when new mail arrives. Click the notification
 
 ## Features
 
+- **Zoho Mail too** (optional) — a Zoho mailbox shows next to the Gmail accounts, see SETUP-ZOHO.md
 - **Menu bar only** — `LSUIElement=true`, no Dock icon, no main window
 - **Native notifications** — UNUserNotificationCenter, click to open in browser
 - **Incremental polling** — `users.history.list` keeps steady-state at ~1-3 quota units per poll

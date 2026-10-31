@@ -6,6 +6,8 @@ struct AuthSession: Codable, Equatable, Sendable {
     let idToken: String?
     let expiresAt: Date
     let email: String?
+    /// Zoho only: raw `ZohoDataCenter` the tokens belong to.
+    var dataCenter: String? = nil
 
     func withEmail(_ email: String) -> AuthSession {
         AuthSession(
@@ -13,7 +15,8 @@ struct AuthSession: Codable, Equatable, Sendable {
             refreshToken: refreshToken,
             idToken: idToken,
             expiresAt: expiresAt,
-            email: email
+            email: email,
+            dataCenter: dataCenter
         )
     }
 

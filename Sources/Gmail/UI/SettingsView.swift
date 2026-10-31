@@ -52,6 +52,7 @@ struct SettingsView: View {
     @Bindable var settings: SettingsModel
     @Bindable var appState: AppState
     let onAddAccount: () -> Void
+    let onAddZohoAccount: () -> Void
     let onReauthorize: (String) -> Void
     let onRemoveAccount: (String) -> Void
     let onLaunchAtLoginChanged: (Bool) -> Void
@@ -73,6 +74,9 @@ struct SettingsView: View {
                 }
                 Button("Add Account\u{2026}", action: onAddAccount)
                     .disabled(!appState.isConfigured)
+                if appState.isZohoConfigured {
+                    Button("Add Zoho Account\u{2026}", action: onAddZohoAccount)
+                }
             } header: {
                 Text("Accounts")
             } footer: {
@@ -120,7 +124,7 @@ struct SettingsView: View {
                 pendingRemoval = nil
             }
         } message: {
-            Text("Its sign-in is revoked and removed from this Mac. Your mail in Gmail is not touched.")
+            Text("Its sign-in is revoked and removed from this Mac. Your mail is not touched.")
         }
     }
 
@@ -130,7 +134,14 @@ struct SettingsView: View {
                 .fill(AccountColor.color(for: account.colorIndex))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
-                Text(account.email)
+                HStack(spacing: 4) {
+                    Text(account.email)
+                    if account.provider != .gmail {
+                        Text(account.provider.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if account.needsReauthorization {
                     Label("Needs sign-in", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
@@ -144,7 +155,7 @@ struct SettingsView: View {
             Spacer()
             if account.needsReauthorization {
                 Button("Sign In Again") { onReauthorize(account.email) }
-                    .disabled(!appState.isConfigured)
+                    .disabled(account.provider == .zoho ? !appState.isZohoConfigured : !appState.isConfigured)
             }
             Button {
                 pendingRemoval = account.email

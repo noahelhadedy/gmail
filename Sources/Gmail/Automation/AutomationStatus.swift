@@ -14,6 +14,8 @@ struct AutomationStatus: Codable, Equatable {
         let state: State
         let unreadCount: Int
         let lastError: String?
+        /// Absent in files written before Zoho support; those accounts are Gmail.
+        var provider: MailProvider? = nil
     }
 
     struct AddAccountResult: Codable, Equatable {
@@ -23,6 +25,7 @@ struct AutomationStatus: Codable, Equatable {
         let error: String?
         let loginHint: String?
         let finishedAt: Date
+        var provider: MailProvider? = nil
     }
 
     var updatedAt: Date
@@ -48,6 +51,7 @@ extension AutomationStatus.Account {
     @MainActor
     init(_ account: AccountState) {
         email = account.email
+        provider = account.provider
         unreadCount = account.unreadCount
         lastError = account.lastError.map { String(describing: $0) }
         if account.needsReauthorization {
@@ -89,13 +93,14 @@ final class AutomationStatusWriter {
         )
     }
 
-    func recordAddAccount(email: String?, loginHint: String?, error: Error?) {
+    func recordAddAccount(email: String?, loginHint: String?, error: Error?, provider: MailProvider = .gmail) {
         lastAddAccount = AutomationStatus.AddAccountResult(
             email: email,
             ok: error == nil,
             error: error.map(Self.describe),
             loginHint: loginHint,
-            finishedAt: now()
+            finishedAt: now(),
+            provider: provider
         )
         write()
     }

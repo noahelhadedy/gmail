@@ -20,7 +20,7 @@ enum LoadState: Equatable {
     case failed(AppError)
 }
 
-/// Everything the UI needs to know about one Google account. Each account is
+/// Everything the UI needs to know about one mail account. Each account is
 /// polled by its own PollingCoordinator, so one account failing never touches
 /// the others' state.
 @MainActor
@@ -28,6 +28,8 @@ enum LoadState: Equatable {
 final class AccountState: Identifiable {
     nonisolated let email: String
     let colorIndex: Int
+    let provider: MailProvider
+    let dataCenter: ZohoDataCenter?
     var emails: [EmailMessage] = []
     var unreadCount: Int = 0
     var authState: AuthState
@@ -36,14 +38,37 @@ final class AccountState: Identifiable {
 
     nonisolated var id: String { email }
 
-    init(email: String, colorIndex: Int, authState: AuthState? = nil) {
+    init(
+        email: String,
+        colorIndex: Int,
+        authState: AuthState? = nil,
+        provider: MailProvider = .gmail,
+        dataCenter: ZohoDataCenter? = nil
+    ) {
         self.email = email
         self.colorIndex = colorIndex
+        self.provider = provider
+        self.dataCenter = dataCenter
         self.authState = authState ?? .signedIn(email: email)
     }
 
     var needsReauthorization: Bool {
         authState == .needsReauthorization
+    }
+
+    /// Opens one message in the provider's web mail.
+    func webURL(for message: EmailMessage) -> URL {
+        switch provider {
+        case .gmail: return GmailWebURL.thread(email: email, threadId: message.threadId)
+        case .zoho: return ZohoWebURL.message(dataCenter: dataCenter ?? .com, messageId: message.id)
+        }
+    }
+
+    var inboxURL: URL {
+        switch provider {
+        case .gmail: return GmailWebURL.inbox(email: email)
+        case .zoho: return ZohoWebURL.inbox(dataCenter: dataCenter ?? .com)
+        }
     }
 
     func reset() {
@@ -62,6 +87,9 @@ final class AppState {
     /// False when the build has no OAuth client ID. The UI shows setup help
     /// instead of an "Add Account" button that can't work.
     var isConfigured: Bool = true
+    /// True when the build has a Zoho OAuth client. Without it the UI hides
+    /// every "Add Zoho Account" entry point.
+    var isZohoConfigured: Bool = false
 
     /// Sum of every account's INBOX unread count. Accounts that need to sign in
     /// again keep their last known count until they are fixed or removed.

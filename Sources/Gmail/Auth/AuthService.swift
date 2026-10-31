@@ -8,14 +8,19 @@ final class AuthService {
     private let authorizer: AuthorizationPerforming
     private let userDefaults: UserDefaults
     private let now: @Sendable () -> Date
+    /// Gmail-era single-account pointer. Zoho accounts must not write it: the
+    /// one-time account-list migration would mistake that email for a Gmail one.
+    private let tracksLastEmail: Bool
     private(set) var session: AuthSession?
 
     init(
         keychain: KeychainService,
         authorizer: AuthorizationPerforming,
         userDefaults: UserDefaults = .standard,
+        tracksLastEmail: Bool = true,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.tracksLastEmail = tracksLastEmail
         self.keychain = keychain
         self.authorizer = authorizer
         self.userDefaults = userDefaults
@@ -70,7 +75,7 @@ final class AuthService {
             to: email
         )
         try persist(updated, account: email)
-        userDefaults.set(email, forKey: Self.lastEmailDefaultsKey)
+        if tracksLastEmail { userDefaults.set(email, forKey: Self.lastEmailDefaultsKey) }
         self.session = updated
     }
 
@@ -92,7 +97,7 @@ final class AuthService {
             // Best-effort; clear local state regardless.
         }
         try keychain.delete(account: accountKey(for: current))
-        userDefaults.removeObject(forKey: Self.lastEmailDefaultsKey)
+        if tracksLastEmail { userDefaults.removeObject(forKey: Self.lastEmailDefaultsKey) }
         self.session = nil
     }
 
@@ -108,7 +113,8 @@ final class AuthService {
                     : refreshed.refreshToken,
                 idToken: refreshed.idToken ?? current.idToken,
                 expiresAt: refreshed.expiresAt,
-                email: current.email
+                email: current.email,
+                dataCenter: current.dataCenter
             )
             try persist(merged, account: accountKey(for: merged))
             self.session = merged
@@ -119,7 +125,7 @@ final class AuthService {
         } catch {
             self.session = nil
             try? keychain.delete(account: accountKey(for: current))
-            userDefaults.removeObject(forKey: Self.lastEmailDefaultsKey)
+            if tracksLastEmail { userDefaults.removeObject(forKey: Self.lastEmailDefaultsKey) }
             throw AppError.auth(.refreshTokenInvalid)
         }
     }

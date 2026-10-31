@@ -15,9 +15,25 @@ enum PollingPauseReason: Equatable, Sendable {
 
 protocol PollingNotifying: Sendable {
     func notifyNewMessages(_ messages: [EmailMessage], account: String) async
+    /// Same, but the banner opens `openURL(message)` (non-Gmail providers).
+    func notifyNewMessages(
+        _ messages: [EmailMessage],
+        account: String,
+        openURL: @escaping @Sendable (EmailMessage) -> URL
+    ) async
 }
 
-/// Polls one Google account. AccountManager owns one coordinator per account,
+extension PollingNotifying {
+    func notifyNewMessages(
+        _ messages: [EmailMessage],
+        account: String,
+        openURL: @escaping @Sendable (EmailMessage) -> URL
+    ) async {
+        await notifyNewMessages(messages, account: account)
+    }
+}
+
+/// Polls one Google account (Gmail provider). AccountManager owns one coordinator per account,
 /// each with its own scheduler, AuthService and history pointer, so a revoked
 /// or failing account never stalls the others.
 @MainActor

@@ -28,12 +28,25 @@ Remotes: `origin` = noahelhadedy/gmail, `upstream` = pezy/gmail.
    - Loop for each account: `open add-account` -> wait for `pending-auth-url.txt` -> open it in Chrome -> consent -> wait until the file is gone and `addAccountInProgress` is false -> check `lastAddAccount.ok` and `email`.
    - Demo mode (`GMAIL_DEMO=1`) ignores these URLs.
 
+5. **Zoho Mail provider (31 Oct 2026)**, for hello@designbookmark.com (Zoho, not Gmail).
+   - Why API and not IMAP: Noah's Zoho mailbox is on the Free plan (`imapAccessEnabled: false`), so IMAP/POP are off. Zoho Mail REST API + OAuth 2.0 works on Free. Data center `.com` (MX = mx.zoho.com). Real mailbox is `noah@designbookmark.com`; `hello@` and `support@` are aliases into the same inbox, so the popover shows one inbox. `login_hint` picks which address is displayed.
+   - Abstraction: `Providers/MailProvider.swift` (`MailProvider`, `ZohoDataCenter`, `ZohoWebURL`), `Polling/AccountPolling.swift` (protocol both pollers conform to; `PollingCoordinator` is unchanged Gmail code), `AccountState.provider/dataCenter`, `StoredAccount.provider/dataCenter` (old stored accounts decode as Gmail), `AuthSession.dataCenter` (optional).
+   - `Zoho/ZohoAPIClient.swift` (accounts, folders, `messages/view?status=unread`, `updatemessage` markAsRead; header `Zoho-oauthtoken`; the real Inbox is the folder with path `/Inbox`, because custom folders can also have folderType Inbox), `Zoho/ZohoAuthorizer.swift` (auth code + PKCE S256, exchanges tokens itself, fixed loopback `http://127.0.0.1:53682/` caught by `Zoho/LoopbackServer.swift`, DC taken from the redirect's `location`/`accounts-server`), `Zoho/ZohoPollingCoordinator.swift`.
+   - Zoho has no unread-count endpoint, so each tick lists up to 200 unread: count = list size (caps at 200), UI shows newest 20. New mail = ids not in the previous tick's set (persisted in `zohoSeenUnreadIds.<email>`, first run never notifies).
+   - Zoho reports token errors as HTTP 200 `{"error": ...}`, and answers "Access Denied" when refreshing too fast. Only `invalid_code`/`invalid_client`/`invalid_token`/`invalid_grant` wipe tokens; everything else is retried (`ZohoAuthorizer.mapRefreshError`).
+   - Zoho `AuthService` has `tracksLastEmail: false` so it never writes the Gmail-era `auth.lastSignedInEmail` (the one-time account-list migration would otherwise turn a Zoho email into a Gmail account).
+   - Build: `scripts/build.sh` reads optional Keychain items `zoho-menubar-client-id` / `zoho-menubar-client-secret` into Info.plist (`ZohoClientID`/`ZohoClientSecret`). Missing = Zoho UI hidden (`AppState.isZohoConfigured`), stored Zoho accounts stay listed as "needs sign-in".
+   - Scriptable: `open "gmailmenubar://add-zoho-account?login_hint=<email>"` writes the consent URL to the same `pending-auth-url.txt`; same wait loop as step 4. `accounts-status.json` now has `provider` per account (and in `lastAddAccount`).
+   - UI: footer add button becomes a menu (Gmail / Zoho) when Zoho is configured; Settings has "Add Zoho Account…"; rows say "Open in Zoho Mail".
+   - Steps for Noah: `SETUP-ZOHO.md` (Arabic).
+   - **Unverified**: the message deep link `https://mail.zoho.com/zm/#mail/folder/inbox/p/<messageId>` (Zoho doesn't document it); the Zoho API console client type (Server-based assumed, Mobile-based is the fallback); no live Zoho sign-in done yet because the API client doesn't exist yet.
+
 Screenshots: `docs/popover-demo-top.png`, `docs/popover-demo-bottom.png` (demo data).
 
 ## Build / test
 
 ```bash
-swift test                               # 130 tests (76 upstream + 54 new)
+swift test                               # 180 tests (76 upstream + 54 multi-account + 50 Zoho)
 ./scripts/build.sh                       # reads OAuth client from Keychain
 ALLOW_UNCONFIGURED=1 ./scripts/build.sh  # UI-only build, no Google sign-in
 ```
@@ -51,6 +64,7 @@ Keychain item names (saved with `~/noah-brain/bin/save-secret`): `gmail-menubar-
 
 ## Left to do
 
+- Zoho: create the API client and save it to Keychain (SETUP-ZOHO.md), rebuild, run `add-zoho-account`, then check the deep link opens the right message.
 - Google Cloud project `gmail-menu-bar-513315` is In production (Desktop client, scope gmail.modify) and the real build is installed in /Applications. Next: add Noah's ~7 accounts through `gmailmenubar://add-account` (see 4). The loopback flow was smoke-tested up to the consent URL only; a full live sign-in is still untested.
 - Workspace accounts may need the admin to trust the client ID (see SETUP.md).
 - Bundle id / Keychain service still `com.pezy.gmail*`. Rename if Noah wants it fully his (would need re-sign-in).

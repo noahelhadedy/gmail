@@ -3,6 +3,25 @@ import Foundation
 struct StoredAccount: Codable, Equatable, Sendable {
     let email: String
     let colorIndex: Int
+    var provider: MailProvider
+    /// Zoho only: the data center the account lives in.
+    var dataCenter: ZohoDataCenter?
+
+    init(email: String, colorIndex: Int, provider: MailProvider = .gmail, dataCenter: ZohoDataCenter? = nil) {
+        self.email = email
+        self.colorIndex = colorIndex
+        self.provider = provider
+        self.dataCenter = dataCenter
+    }
+
+    // Accounts saved before Zoho support have no provider key: they are Gmail.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        email = try container.decode(String.self, forKey: .email)
+        colorIndex = try container.decode(Int.self, forKey: .colorIndex)
+        provider = try container.decodeIfPresent(MailProvider.self, forKey: .provider) ?? .gmail
+        dataCenter = try container.decodeIfPresent(ZohoDataCenter.self, forKey: .dataCenter)
+    }
 }
 
 /// Persists the ordered list of signed-in accounts in UserDefaults. Tokens
@@ -37,12 +56,17 @@ struct AccountStore {
     /// Adds the account if it's new and returns its stored entry. Re-adding an
     /// existing email (any case) returns the existing entry unchanged.
     @discardableResult
-    func add(email: String) -> StoredAccount {
+    func add(email: String, provider: MailProvider = .gmail, dataCenter: ZohoDataCenter? = nil) -> StoredAccount {
         var accounts = load()
         if let existing = accounts.first(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) {
             return existing
         }
-        let account = StoredAccount(email: email, colorIndex: Self.nextColorIndex(for: accounts))
+        let account = StoredAccount(
+            email: email,
+            colorIndex: Self.nextColorIndex(for: accounts),
+            provider: provider,
+            dataCenter: dataCenter
+        )
         accounts.append(account)
         save(accounts)
         return account

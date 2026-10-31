@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var settingsWindow: NSWindowController?
     private let loginItems = LoginItemsManager()
     private var authorizer: AppAuthAuthorizer?
+    private var zohoAuthorizer: ZohoAuthorizer?
     /// Nil in demo mode so sample data never lands in the real status file.
     private var statusWriter: AutomationStatusWriter?
     /// URLs can arrive before launch finishes when `open` starts the app.
@@ -31,12 +32,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Without a client ID the app still runs (accounts list, settings, setup
         // help) so it can be launched and checked before Google Cloud is set up.
         authorizer = Self.makeAuthorizer()
+        zohoAuthorizer = Self.makeZohoAuthorizer()
         accounts = AccountManager(
             appState: appState,
             store: AccountStore(),
             keychain: KeychainService(),
             authorizer: authorizer,
             api: GmailAPIClient(),
+            zoho: Self.makeZohoConfig(signIn: zohoAuthorizer),
             notifier: notificationManager
         )
         accounts.interval = settingsModel.pollingInterval.rawValue
@@ -46,7 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             onRefresh: { [weak self] in Task { await self?.accounts.refreshAll() } },
             onRefreshAccount: { [weak self] email in Task { await self?.accounts.refresh(email: email) } },
             onAddAccount: { [weak self] in Task { await self?.addAccount() } },
-            onReauthorize: { [weak self] _ in Task { await self?.addAccount() } },
+            onAddZohoAccount: { [weak self] in Task { await self?.addZohoAccount() } },
+            onReauthorize: { [weak self] email in Task { await self?.reauthorize(email) } },
             onMarkAsRead: { [weak self] message, email in
                 Task { await self?.accounts.markAsRead(message, in: email) }
             },
@@ -106,20 +110,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .status:
             statusWriter.write()
         case .addAccount(let loginHint):
-            // A newer request replaces a pending one (e.g. the wrong account was
-            // picked or the browser tab was closed).
-            let previous = automationAddTask
-            authorizer?.cancelExternalAuthorization()
-            automationAddTask = Task { [weak self] in
-                await previous?.value
-                await self?.addAccountExternally(loginHint: loginHint)
-            }
+            replaceAddTask { await self.addAccountExternally(loginHint: loginHint, provider: .gmail) }
+        case .addZohoAccount(let loginHint):
+            replaceAddTask { await self.addAccountExternally(loginHint: loginHint, provider: .zoho) }
+        }
+    }
+
+    /// A newer request replaces a pending one (e.g. the wrong account was
+    /// picked or the browser tab was closed).
+    private func replaceAddTask(_ work: @escaping @MainActor () async -> Void) {
+        let previous = automationAddTask
+        authorizer?.cancelExternalAuthorization()
+        accounts.cancelZohoSignIn()
+        automationAddTask = Task {
+            await previous?.value
+            await work()
         }
     }
 
     /// Scriptable sign-in: no sheet and no alerts. The consent URL lands in
     /// pending-auth-url.txt and the outcome in accounts-status.json.
-    private func addAccountExternally(loginHint: String?) async {
+    private func addAccountExternally(loginHint: String?, provider: MailProvider) async {
         guard let statusWriter else { return }
         statusWriter.addAccountInProgress = true
         statusWriter.write()
@@ -128,10 +139,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             statusWriter.write()
         }
         do {
-            let email = try await accounts.addAccount(mode: .externalBrowser(loginHint: loginHint))
-            statusWriter.recordAddAccount(email: email, loginHint: loginHint, error: nil)
+            let mode = SignInMode.externalBrowser(loginHint: loginHint)
+            let email: String
+            switch provider {
+            case .gmail: email = try await accounts.addAccount(mode: mode)
+            case .zoho: email = try await accounts.addZohoAccount(mode: mode, loginHint: loginHint)
+            }
+            statusWriter.recordAddAccount(email: email, loginHint: loginHint, error: nil, provider: provider)
         } catch {
-            statusWriter.recordAddAccount(email: nil, loginHint: loginHint, error: error)
+            statusWriter.recordAddAccount(email: nil, loginHint: loginHint, error: error, provider: provider)
         }
     }
 
@@ -155,6 +171,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             clientID: clientID,
             clientSecret: clientSecret,
             redirectURL: URL(string: "\(scheme):/oauth2redirect")!
+        )
+    }
+
+    /// Reads the optional Zoho OAuth client baked into Info.plist by
+    /// scripts/build.sh. Nil when the build has none (placeholders or empty).
+    private static func makeZohoAuthorizer() -> ZohoAuthorizer? {
+        func value(_ key: String) -> String? {
+            guard let raw = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+                  !raw.isEmpty, !raw.hasPrefix("__ZOHO") else { return nil }
+            return raw
+        }
+        guard let id = value("ZohoClientID"), let secret = value("ZohoClientSecret") else { return nil }
+        return ZohoAuthorizer(clientID: id, clientSecret: secret)
+    }
+
+    private static func makeZohoConfig(signIn: ZohoAuthorizer?) -> ZohoProviderConfig? {
+        guard let signIn,
+              let id = Bundle.main.object(forInfoDictionaryKey: "ZohoClientID") as? String,
+              let secret = Bundle.main.object(forInfoDictionaryKey: "ZohoClientSecret") as? String else {
+            return nil
+        }
+        return ZohoProviderConfig(
+            signIn: signIn,
+            cancelSignIn: { signIn.cancelAuthorization() },
+            makeAuthorizer: { ZohoAuthorizer(clientID: id, clientSecret: secret, dataCenter: $0) },
+            makeAPI: { ZohoAPIClient(dataCenter: $0) }
         )
     }
 
@@ -188,6 +230,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    private func addZohoAccount() async {
+        guard appState.isZohoConfigured else {
+            presentError(
+                "Zoho client missing",
+                detail: "Create a Zoho API client, save it to Keychain, then rebuild with scripts/build.sh. See SETUP-ZOHO.md."
+            )
+            return
+        }
+        do {
+            let email = try await accounts.addZohoAccount()
+            statusWriter?.recordAddAccount(email: email, loginHint: nil, error: nil, provider: .zoho)
+        } catch {
+            statusWriter?.recordAddAccount(email: nil, loginHint: nil, error: error, provider: .zoho)
+            presentError("Couldn't add the Zoho account", detail: error.localizedDescription)
+        }
+    }
+
+    /// "Sign In Again" goes back through the provider the account belongs to.
+    private func reauthorize(_ email: String) async {
+        if appState.account(for: email)?.provider == .zoho {
+            await addZohoAccount()
+        } else {
+            await addAccount()
+        }
+    }
+
     private func removeAccount(_ email: String) async {
         await accounts.removeAccount(email: email)
     }
@@ -198,7 +266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 settings: settingsModel,
                 appState: appState,
                 onAddAccount: { [weak self] in Task { await self?.addAccount() } },
-                onReauthorize: { [weak self] _ in Task { await self?.addAccount() } },
+                onAddZohoAccount: { [weak self] in Task { await self?.addZohoAccount() } },
+                onReauthorize: { [weak self] email in Task { await self?.reauthorize(email) } },
                 onRemoveAccount: { [weak self] email in Task { await self?.removeAccount(email) } },
                 onLaunchAtLoginChanged: { [weak self] enabled in
                     self?.loginItems.setEnabled(enabled)
