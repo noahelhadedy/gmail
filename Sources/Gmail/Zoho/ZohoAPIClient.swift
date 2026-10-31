@@ -99,6 +99,7 @@ final class ZohoAPIClient: ZohoAPIClienting, @unchecked Sendable {
         } catch {
             throw AppError.network(.unknown(reason: error.localizedDescription))
         }
+        ZohoDebugLog.record(step: "api \(request.httpMethod ?? "GET") \(request.url?.path ?? "")", response: response, data: data)
         guard let http = response as? HTTPURLResponse else {
             throw AppError.api(.malformedResponse)
         }

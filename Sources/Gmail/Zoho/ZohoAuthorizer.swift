@@ -186,6 +186,8 @@ final class ZohoAuthorizer: AuthorizationPerforming, @unchecked Sendable {
         } catch {
             throw AppError.network(.unknown(reason: error.localizedDescription))
         }
+        ZohoDebugLog.recordFields(step: "token \(fields["grant_type"] ?? "")", fields: fields)
+        ZohoDebugLog.record(step: "token \(fields["grant_type"] ?? "") \(host)", response: response, data: data)
         if let http = response as? HTTPURLResponse, http.statusCode >= 500 {
             throw AppError.network(.unknown(reason: "Zoho accounts server HTTP \(http.statusCode)"))
         }
